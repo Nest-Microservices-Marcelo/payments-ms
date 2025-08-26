@@ -1,12 +1,16 @@
-import { Injectable } from '@nestjs/common';
-import { envs } from 'src/config';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { envs, NATS_SERVICE } from 'src/config';
 import Stripe from 'stripe';
 import { PaymentSessionDto } from './dto/payment-session.dto';
 import { Request, Response } from 'express';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class PaymentsService {
   private readonly stripe = new Stripe(envs.stripeSecret);
+  private readonly logger = new Logger('paymentsService');
+
+  constructor(@Inject(NATS_SERVICE) private readonly client: ClientProxy) {}
 
   async createPaymentSession(paymentSessionDto: PaymentSessionDto) {
     const { currency, items, orderId } = paymentSessionDto;
@@ -39,7 +43,11 @@ export class PaymentsService {
       cancel_url: envs.stripeCancelUrl,
     });
 
-    return session;
+    return {
+      calcelUrl: session.cancel_url,
+      successUrl: session.success_url,
+      url: session.url,
+    };
   }
 
   async stripeWebhook(req: Request, res: Response) {
@@ -60,14 +68,20 @@ export class PaymentsService {
       return;
     }
 
+    // Manejo de eventos de Stripe
     switch (event.type) {
-      case 'charge.succeeded':
+      case 'charge.succeeded': // Evento de pago exitoso
         const chargeSucceeded = event.data.object;
-        //TODO: llamar nuestro microservicio
-        console.log({
-          metadata: chargeSucceeded.metadata,
-          orderId: chargeSucceeded.metadata.orderId,
-        });
+        const payload = {
+          stripePaymentId: chargeSucceeded.id, // ID del pago en Stripe
+          orderId: chargeSucceeded.metadata.orderId, // Obtener el ID de la orden desde los metadatos
+          receiptUrl: chargeSucceeded.receipt_url, // URL del recibo de pago
+        };
+
+        //this.logger.log({ payload }); // Esto es para registrar el pago exitoso
+        this.client.emit('payment.succeeded', payload); // Emitir el evento de pago exitoso // Este evento lo va a escuchar el orders.controller.ts
+        // El "send" manda el mensaje y espera una respuesta
+        // El "emit" manda el mensaje pero no espera respuesta
         break;
       default:
         console.log(`Event ${event.type} no handled`);
