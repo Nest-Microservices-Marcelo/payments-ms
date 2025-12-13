@@ -1,0 +1,52 @@
+# Dependencias
+FROM node:20-alpine3.20 as deps
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+
+
+
+# Builder - Construye la aplicacion
+FROM node:20-alpine3.20 as build
+
+WORKDIR /usr/src/app
+
+# Copiar de deps, los modulos de node
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+
+# Copiar todo el codigo fuente de la aplicacion
+COPY . .
+
+# RUN npm run test - si fallan los tests, se detiene el build (En este caso no se implementa pero se puede hacer para que no se corra el build si falla el test)
+RUN npm run build
+
+# Instalar las dependencias de produccion, dependencias que no se usan en desarrollo (Ahoramos tanta memoria como sea posible)
+RUN npm ci -f --only=production && npm cache clean --force
+
+
+
+
+# Crear la imagen final de Docker
+FROM node:20-alpine3.20 as prod
+
+WORKDIR /usr/src/app
+
+COPY --from=build /usr/src/app/node_modules ./node_modules
+
+# Copiar la carpeta de DIST
+COPY --from=build /usr/src/app/dist ./dist
+
+# Indicamos que estamos en modo de produccion
+ENV NODE_ENV=production
+
+# Utilizamos el usuario node para ejecutar la aplicacion y no root que es el que viene por defecto (Esto evita problemas de permisos)
+USER node
+
+EXPOSE 3000
+
+CMD [ "node", "dist/main.js"]
